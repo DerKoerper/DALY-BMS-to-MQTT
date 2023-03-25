@@ -21,22 +21,18 @@ total_hours_wasted_here = 254
 #include "main.h"
 #include <daly-bms-uart.h> // This is where the library gets pulled in
 
-#include "display.h"
-
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <ESP8266mDNS.h>
-#include <ESPAsyncWiFiManager.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
+#include <ESP8266WiFi.h>
 
 #include "Settings.h"
 
-#include "webpages/htmlCase.h"      // The HTML Konstructor
-#include "webpages/main.h"          // landing page with menu
-#include "webpages/settings.h"      // settings page
-#include "webpages/settingsedit.h"  // mqtt settings page
-#include "webpages/htmlProzessor.h" // The html Prozessor
+const char* ssid = "Spielkinder";
+const char* password = "sak18AnvpyMm";
+
+IPAddress local_IP(192, 168, 0, 36);
+IPAddress gateway(192, 168, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 WiFiClient client;
 Settings _settings;
@@ -53,10 +49,7 @@ int mqttdebug;
 unsigned long mqtttimer = 0;
 unsigned long bmstimer = 0;
 unsigned long RestartTimer = 0;
-AsyncWebServer server(80);
-AsyncWebSocket ws("/ws");
-AsyncWebSocketClient *wsClient;
-DNSServer dns;
+
 Daly_BMS_UART bms(MYPORT_RX, MYPORT_TX);
 
 #include "status-LED.h"
@@ -84,131 +77,6 @@ void saveConfigCallback()
 
   DEBUG_PRINTLN(F("Should save config"));
   shouldSaveConfig = true;
-}
-
-static void handle_update_progress_cb(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
-{
-  updateProgress = true;
-  uint32_t free_space = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-  if (!index)
-  {
-    DEBUG_PRINTLN(F("Starting Firmware Update"));
-    Update.runAsync(true);
-    if (!Update.begin(free_space, U_FLASH))
-    {
-#ifdef isDEBUG
-      Update.printError(DALY_BMS_DEBUG);
-#endif
-      ESP.restart();
-    }
-  }
-
-  if (Update.write(data, len) != len)
-  {
-#ifdef isDEBUG
-    Update.printError(DALY_BMS_DEBUG);
-#endif
-    ESP.restart();
-  }
-
-  if (final)
-  {
-    if (!Update.end(true))
-    {
-#ifdef isDEBUG
-      Update.printError(DALY_BMS_DEBUG);
-#endif
-      ESP.restart();
-    }
-    else
-    {
-      AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", "Please wait while the device is booting new Firmware");
-      response->addHeader("Refresh", "12; url=/");
-      response->addHeader("Connection", "close");
-      request->send(response);
-      DEBUG_PRINTLN(F("Update complete"));
-      RestartTimer = millis();
-      restartNow = true; // Set flag so main loop can issue restart call
-    }
-  }
-}
-
-void notifyClients()
-{
-  if (wsClient != nullptr && wsClient->canSend())
-  {
-    DEBUG_PRINT(F("Info: Data sent to WebSocket... "));
-    char data[JSON_BUFFER];
-    size_t len = serializeJson(bmsJson, data);
-    wsClient->text(data, len);
-    DEBUG_PRINT(F("Done\n"));
-  }
-}
-
-void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
-{
-  AwsFrameInfo *info = (AwsFrameInfo *)arg;
-  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
-  {
-    data[len] = 0;
-    updateProgress = true;
-    if (strcmp((char *)data, "dischargeFetSwitch_on") == 0)
-    {
-      bms.setDischargeMOS(true);
-    }
-    if (strcmp((char *)data, "dischargeFetSwitch_off") == 0)
-    {
-      bms.setDischargeMOS(false);
-    }
-    if (strcmp((char *)data, "chargeFetSwitch_on") == 0)
-    {
-      bms.setChargeMOS(true);
-    }
-    if (strcmp((char *)data, "chargeFetSwitch_off") == 0)
-    {
-      bms.setChargeMOS(false);
-    }
-    if (strcmp((char *)data, "relaisOutputSwitch_on") == 0)
-    {
-      relaisComparsionResult = true;
-    }
-    if (strcmp((char *)data, "relaisOutputSwitch_off") == 0)
-    {
-      relaisComparsionResult = false;
-    }
-    if (strcmp((char *)data, "wake_bms") == 0)
-    {
-      digitalWrite(WAKEUP_PIN, HIGH);
-      delay(WAKEUP_DURATION);
-      DEBUG_PRINTLN(F("wakeup manual from Web"));
-      digitalWrite(WAKEUP_PIN, LOW);
-    }
-    updateProgress = false;
-  }
-}
-
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
-{
-  switch (type)
-  {
-  case WS_EVT_CONNECT:
-    wsClient = client;
-    getJsonDevice();
-    getJsonData();
-    notifyClients();
-    break;
-  case WS_EVT_DISCONNECT:
-    wsClient = nullptr;
-    break;
-  case WS_EVT_DATA:
-    bmstimer = millis();
-    mqtttimer = millis();
-    handleWebSocketMessage(arg, data, len);
-    break;
-  case WS_EVT_PONG:
-  case WS_EVT_ERROR:
-    break;
-  }
 }
 
 bool wakeupHandler()
@@ -331,23 +199,29 @@ bool relaisHandler()
 void setup()
 {
   DEBUG_BEGIN(9600); // Debugging towards UART
-  _settings.load();
 
   pinMode(WAKEUP_PIN, OUTPUT);
   pinMode(RELAIS_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
   analogWrite(LED_PIN, 0);
   WiFi.persistent(true);                          // fix wifi save bug
+
+    // Configures static IP address
+    if (!WiFi.config(local_IP, gateway, subnet)) {
+        Serial.println("STA Failed to configure");
+    }
+
+    // Connect to Wi-Fi network with SSID and password
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+    }
+
   deviceJson["Name"] = _settings.data.deviceName; // set the device name in json string
 
   sprintf(mqttClientId, "%s-%06X", _settings.data.deviceName, ESP.getChipId());
 
-  AsyncWiFiManager wm(&server, &dns);
-  wm.setDebugOutput(false);       // disable wifimanager debug output
-  wm.setMinimumSignalQuality(20); // filter weak wifi signals
-  wm.setConnectTimeout(30);       // how long to try to connect for before continuing
-  wm.setConfigPortalTimeout(120); // auto close configportal after n seconds
-  wm.setSaveConfigCallback(saveConfigCallback);
+
   DEBUG_PRINTLN();
   DEBUG_PRINT(F("Device Name:\t"));
   DEBUG_PRINTLN(_settings.data.deviceName);
@@ -377,198 +251,18 @@ void setup()
   DEBUG_PRINTLN(_settings.data.relaisSetValue);
   DEBUG_PRINT(F("relaisHysteresis:\t"));
   DEBUG_PRINTLN(_settings.data.relaisHysteresis);
-  AsyncWiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT server", NULL, 32);
-  AsyncWiFiManagerParameter custom_mqtt_user("mqtt_user", "MQTT User", NULL, 32);
-  AsyncWiFiManagerParameter custom_mqtt_pass("mqtt_pass", "MQTT Password", NULL, 32);
-  AsyncWiFiManagerParameter custom_mqtt_topic("mqtt_topic", "MQTT Topic", "BMS01", 32);
-  AsyncWiFiManagerParameter custom_mqtt_port("mqtt_port", "MQTT Port", "1883", 5);
-  AsyncWiFiManagerParameter custom_mqtt_refresh("mqtt_refresh", "MQTT Send Interval", "300", 4);
-  AsyncWiFiManagerParameter custom_device_name("device_name", "Device Name", "DALY-BMS-to-MQTT", 32);
-
-  wm.addParameter(&custom_mqtt_server);
-  wm.addParameter(&custom_mqtt_user);
-  wm.addParameter(&custom_mqtt_pass);
-  wm.addParameter(&custom_mqtt_topic);
-  wm.addParameter(&custom_mqtt_port);
-  wm.addParameter(&custom_mqtt_refresh);
-  wm.addParameter(&custom_device_name);
-
-  bool apRunning = wm.autoConnect("DALY-BMS-AP");
-
-  // save settings if wifi setup is fire up
-  if (shouldSaveConfig)
-  {
-    strncpy(_settings.data.mqttServer, custom_mqtt_server.getValue(), 40);
-    strncpy(_settings.data.mqttUser, custom_mqtt_user.getValue(), 40);
-    strncpy(_settings.data.mqttPassword, custom_mqtt_pass.getValue(), 40);
-    _settings.data.mqttPort = atoi(custom_mqtt_port.getValue());
-    strncpy(_settings.data.deviceName, custom_device_name.getValue(), 40);
-    strncpy(_settings.data.mqttTopic, custom_mqtt_topic.getValue(), 40);
-    _settings.data.mqttRefresh = atoi(custom_mqtt_refresh.getValue());
-    _settings.save();
-    ESP.restart();
-  }
 
   mqttclient.setServer(_settings.data.mqttServer, _settings.data.mqttPort);
   DEBUG_PRINTLN(F("MQTT Server config Loaded"));
 
   mqttclient.setCallback(mqttcallback);
   mqttclient.setBufferSize(MQTT_BUFFER);
-  //  check is WiFi connected
-  if (!apRunning)
-  {
-    DEBUG_PRINTLN(F("Failed to connect to WiFi or hit timeout"));
-  }
-  else
-  {
-    deviceJson["IP"] = WiFi.localIP(); // grab the device ip
 
-    bms.Init(); // init the bms driver
-    bms.callback(prozessUartData);
+  deviceJson["IP"] = WiFi.localIP(); // grab the device ip
 
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", HTML_MAIN, htmlProcessor);
-request->send(response); });
+  bms.Init(); // init the bms driver
+  bms.callback(prozessUartData);
 
-    server.on("/livejson", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-                AsyncResponseStream *response = request->beginResponseStream("application/json");
-                serializeJson(bmsJson, *response);
-                request->send(response); });
-
-    server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-                AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", "Please wait while the device reboots...");
-                response->addHeader("Refresh", "3; url=/");
-                response->addHeader("Connection", "close");
-                request->send(response);
-                RestartTimer = millis();
-                restartNow = true; });
-
-    server.on("/confirmreset", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-                AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", HTML_CONFIRM_RESET, htmlProcessor);
-request->send(response); });
-
-    server.on("/reset", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-                AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", "Device is Erasing...");
-                response->addHeader("Refresh", "15; url=/");
-                response->addHeader("Connection", "close");
-                request->send(response);
-                delay(1000);
-                _settings.reset();
-                ESP.eraseConfig();
-                ESP.restart(); });
-
-    server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", HTML_SETTINGS, htmlProcessor);
-request->send(response); });
-
-    server.on("/settingsedit", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", HTML_SETTINGS_EDIT, htmlProcessor);
-request->send(response); });
-
-    server.on("/settingssave", HTTP_POST, [](AsyncWebServerRequest *request)
-              {
-                strncpy(_settings.data.mqttServer, request->arg("post_mqttServer").c_str(), 40);
-                _settings.data.mqttPort = request->arg("post_mqttPort").toInt();
-                strncpy(_settings.data.mqttUser, request->arg("post_mqttUser").c_str(), 40);
-                strncpy(_settings.data.mqttPassword, request->arg("post_mqttPassword").c_str(), 40);
-                strncpy(_settings.data.mqttTopic, request->arg("post_mqttTopic").c_str(), 40);
-                _settings.data.mqttRefresh = request->arg("post_mqttRefresh").toInt() < 1 ? 1 : request->arg("post_mqttRefresh").toInt(); // prevent lower numbers
-                strncpy(_settings.data.deviceName, request->arg("post_deviceName").c_str(), 40);
-
-                _settings.data.mqttJson = (request->arg("post_mqttjson") == "true") ? true : false;
-                _settings.data.wakeupEnable = (request->arg("post_wakeupenable") == "true") ? true : false;
-                _settings.data.relaisEnable = (request->arg("post_relaisenable") == "true") ? true : false;
-                _settings.data.relaisInvert = (request->arg("post_relaisinvert") == "true") ? true : false;
-                
-                _settings.data.relaisFailsafe = (request->arg("post_relaisfailsafe") == "true") ? true : false;
-                  
-                _settings.data.relaisFunction = request->arg("post_relaisfunction").toInt();
-                _settings.data.relaisComparsion = request->arg("post_relaiscomparsion").toInt();
-                _settings.data.relaisSetValue = request->arg("post_relaissetvalue").toFloat();
-                _settings.data.relaisHysteresis = request->arg("post_relaishysteresis").toFloat();
-                _settings.save();
-                request->redirect("/reboot"); });
-
-    server.on("/set", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-                AsyncWebParameter *p = request->getParam(0);
-                if (p->name() == "chargefet")
-                {
-                    DEBUG_PRINTLN(F("Webcall: charge fet to: ")+(String)p->value());
-                    if(p->value().toInt() == 1){
-                      bms.setChargeMOS(true);
-                      bms.get.chargeFetState = true;
-                    }
-                    if(p->value().toInt() == 0){
-                      bms.setChargeMOS(false);
-                      bms.get.chargeFetState = false;
-                    }
-                }
-                if (p->name() == "dischargefet")
-                {
-                    DEBUG_PRINTLN(F("Webcall: discharge fet to: ")+(String)p->value());
-                    if(p->value().toInt() == 1){
-                      bms.setDischargeMOS(true);
-                      bms.get.disChargeFetState = true;
-                    }
-                    if(p->value().toInt() == 0){
-                      bms.setDischargeMOS(false);
-                      bms.get.disChargeFetState = false;
-                    }
-                }
-                if (p->name() == "soc")
-                {
-                    DEBUG_PRINTLN(F("Webcall: setsoc SOC set to: ")+(String)p->value());
-                    if(p->value().toInt() >= 0 && p->value().toInt() <= 100 ){
-                      bms.setSOC(p->value().toInt());
-                    }
-                }
-                if (p->name() == "relais")
-                {
-                    DEBUG_PRINTLN(F("Webcall: set relais to: ")+(String)p->value());
-                    if(p->value() == "true"){
-                      relaisComparsionResult = true;
-                    }
-                    if(p->value().toInt() == 0){
-                      relaisComparsionResult = false;
-                    }
-                }
-                if (p->name() == "bmsreset")
-                {
-                    DEBUG_PRINTLN(F("Webcall: reset BMS"));
-                    if(p->value().toInt() == 1){
-                      bms.setBmsReset();
-                    }
-                }
-                request->send(200, "text/plain", "message received"); });
-    server.on(
-        "/update", HTTP_POST, [](AsyncWebServerRequest *request)
-        {
-          Serial.end();
-          updateProgress = true;
-          ws.enable(false);
-          ws.closeAll();
-          request->send(200); },
-        handle_update_progress_cb);
-
-    // set the device name
-    MDNS.addService("http", "tcp", 80);
-    if (MDNS.begin(_settings.data.deviceName))
-      DEBUG_PRINTLN(F("mDNS running..."));
-    WiFi.hostname(_settings.data.deviceName);
-    ws.onEvent(onEvent);
-    server.addHandler(&ws);
-    server.begin();
-
-    DEBUG_PRINTLN(F("Webserver Running..."));
-  }
   analogWrite(LED_PIN, 255);
 }
 // end void setup
@@ -577,28 +271,8 @@ void loop()
   // Make sure wifi is in the right mode
   if (WiFi.status() == WL_CONNECTED)
   {
-    ws.cleanupClients(); // clean unused client connections
-    MDNS.update();
-
     if (!updateProgress)
     {
-      if (millis() >= (bmstimer + (3 * 1000)) && wsClient != nullptr && wsClient->canSend())
-      {
-        getJsonDevice();
-        bms.update();
-        if (bms.getState() >= 0) // check bms connection
-        {
-          getJsonData();
-          notifyClients();
-          bmstimer = millis();
-        }
-        else if (bms.getState() == -2)
-        {
-          getJsonData();
-          notifyClients();
-          bmstimer = millis();
-        }
-      }
       if (millis() >= (mqtttimer + (_settings.data.mqttRefresh * 1000)))
       {
 
@@ -671,7 +345,7 @@ void getJsonDevice()
   deviceJson[F("json_memory_usage")] = bmsJson.memoryUsage();
   deviceJson[F("json_capacity")] = bmsJson.capacity();
   deviceJson[F("runtime")] = millis() / 1000;
-  deviceJson[F("ws_clients")] = ws.count();
+  deviceJson[F("ws_clients")] = 0;
   deviceJson[F("MQTT_Json")] = _settings.data.mqttJson;
 #endif
 }

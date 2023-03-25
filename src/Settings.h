@@ -6,9 +6,6 @@ when copy code or reuse make a note where the codes comes from.
 */
 
 #include <Arduino.h>
-#include <EEPROM.h>
-
-#define EEPROM_SIZE 1024
 
 class Settings
 {
@@ -37,7 +34,7 @@ public:
     float relaisHysteresis; // value to compare to
   } data;
 
-  void load()
+/*  void load()
   {
     data = {}; // clear bevor load data
     EEPROM.begin(EEPROM_SIZE);
@@ -61,100 +58,28 @@ public:
     data = {};
     save();
   }
+*/
 
 private:
   // check the variables from eeprom
 
-  void sanitycheck()
+  void load_settings()
   {
-    if (strlen(data.deviceName) == 0 || strlen(data.deviceName) >= 40)
-    {
-      strcpy(data.deviceName, "DALY-BMS-to-MQTT");
-    }
-    if (strlen(data.mqttServer) == 0 || strlen(data.mqttServer) >= 40)
-    {
-      strcpy(data.mqttServer, "-1");
-    }
-    if (strlen(data.mqttUser) == 0 || strlen(data.mqttUser) >= 40)
-    {
-      strcpy(data.mqttUser, "");
-    }
-    if (strlen(data.mqttPassword) == 0 || strlen(data.mqttPassword) >= 40)
-    {
-      strcpy(data.mqttPassword, "");
-    }
-    if (strlen(data.mqttTopic) == 0 || strlen(data.mqttTopic) >= 40)
-    {
-      strcpy(data.mqttTopic, "BMS01");
-    }
-    if (data.mqttPort <= 0 || data.mqttPort >= 65530)
-    {
-      data.mqttPort = 0;
-    }
-    if (data.mqttRefresh <= 1 || data.mqttRefresh >= 65530)
-    {
-      data.mqttRefresh = 1;
-    }
-    if (data.mqttJson && !data.mqttJson)
-    {
-      data.mqttJson = false;
-    }
-    if (data.wakeupEnable && !data.wakeupEnable)
-    {
-      data.wakeupEnable = false;
-    }
-    if (data.relaisFailsafe && !data.relaisFailsafe)
-    {
-      data.relaisFailsafe = false;
-    }
-    if (data.relaisEnable && !data.relaisEnable)
-    {
-      data.relaisEnable = false;
-    }
-    if (data.relaisInvert && !data.relaisInvert)
-    {
-      data.relaisInvert = false;
-    }
-    if (data.relaisFunction < 0 || data.relaisFunction > 4)
-    {
-      data.relaisFunction = 0;
-    }
-    if (data.relaisComparsion < 0 || data.relaisComparsion > 1)
-    {
-      data.relaisComparsion = 0;
-    }
-    if (data.relaisSetValue < -100 || data.relaisSetValue > 100)
-    {
-      data.relaisSetValue = 0;
-    }
-    if (data.relaisHysteresis < -100 || data.relaisHysteresis > 100)
-    {
-      data.relaisHysteresis = 0;
-    }
-  }
-  void coVersCheck()
-  {
-    if (data.coVers != configVersion)
-    {
-      data.coVers = configVersion;
-      strcpy(data.deviceName, "DALY-BMS-to-MQTT");
-      strcpy(data.mqttServer, "-1");
+      strcpy(data.deviceName, "SolarToWifi");
+      strcpy(data.mqttServer, "192.168.0.50");
       strcpy(data.mqttUser, "");
       strcpy(data.mqttPassword, "");
-      strcpy(data.mqttTopic, "BMS01");
-      data.mqttPort = 0;
+      strcpy(data.mqttTopic, "akkukiste");
+      data.mqttPort = 1883;
       data.mqttRefresh = 300;
       data.mqttJson = false;
-      data.wakeupEnable = false;
+      data.wakeupEnable = true;
       data.relaisFailsafe = false;
-      data.relaisEnable = false;
+      data.relaisEnable = true;
       data.relaisInvert = false;
       data.relaisFunction = 0;
       data.relaisComparsion = 0;
       data.relaisSetValue = 0.0;
       data.relaisHysteresis = 0.0;
-      save();
-      load();
-    }
   }
 };
